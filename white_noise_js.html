@@ -1,0 +1,243 @@
+<!-- white_noise_js.html — белый шум с таймером сна на JavaScript (Web Audio API) -->
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🌊 WhiteNoise Sleep Timer</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background: #1a1a2e;
+            color: #eee;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .container {
+            background: #16213e;
+            padding: 30px;
+            border-radius: 15px;
+            width: 400px;
+            text-align: center;
+            box-shadow: 0 0 30px rgba(0,0,0,0.5);
+        }
+        h1 { margin-top: 0; color: #4fc3f7; }
+        .display { font-size: 2em; margin: 20px 0; }
+        .controls { display: flex; flex-wrap: wrap; justify-content: center; gap: 10px; }
+        button {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 8px;
+            background: #0f3460;
+            color: #fff;
+            font-size: 1em;
+            cursor: pointer;
+            transition: 0.3s;
+        }
+        button:hover { background: #1a5276; }
+        button.active { background: #e74c3c; }
+        .slider-container { margin: 15px 0; }
+        input[type="range"] { width: 100%; }
+        .info { margin-top: 15px; font-size: 0.9em; color: #aaa; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>🌊 WhiteNoise</h1>
+    <div class="display" id="statusDisplay">⏸ Остановлен</div>
+    <div class="display" id="timerDisplay">⏱ 30:00</div>
+    <div class="controls">
+        <button id="playBtn">▶ Запустить</button>
+        <button id="stopBtn">⏹ Стоп</button>
+    </div>
+    <div class="controls">
+        <button id="whiteBtn">Белый</button>
+        <button id="pinkBtn">Розовый</button>
+        <button id="brownBtn">Коричневый</button>
+    </div>
+    <div class="slider-container">
+        <label>Громкость: <span id="volumeLabel">70%</span></label>
+        <input type="range" id="volumeSlider" min="0" max="100" value="70">
+    </div>
+    <div class="slider-container">
+        <label>Таймер (мин): <span id="timerLabel">30</span></label>
+        <input type="range" id="timerSlider" min="5" max="120" value="30">
+    </div>
+    <div class="info">Нажмите "Запустить" для воспроизведения</div>
+</div>
+<script>
+    class WhiteNoise {
+        constructor() {
+            this.audioCtx = null;
+            this.source = null;
+            this.scriptNode = null;
+            this.running = false;
+            this.volume = 0.7;
+            this.noiseType = 'white';
+            this.timerMinutes = 30;
+            this.startTime = null;
+            this.fadeDuration = 60; // seconds
+            this.timerInterval = null;
+            this.bufferSize = 4096;
+            this.noiseState = 0; // для pink/brown
+        }
+
+        async init() {
+            this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+
+        generateNoise(samples) {
+            const buffer = new Float32Array(samples);
+            let state = this.noiseState;
+            for (let i = 0; i < samples; i++) {
+                let val;
+                const w = Math.random() * 2 - 1;
+                if (this.noiseType === 'white') {
+                    val = w;
+                } else if (this.noiseType === 'pink') {
+                    state = 0.998 * state + 0.05 * w;
+                    val = state;
+                } else { // brown
+                    state += w * 0.02;
+                    if (state > 1) state = 1;
+                    else if (state < -1) state = -1;
+                    val = state;
+                }
+                buffer[i] = val * this.volume;
+            }
+            this.noiseState = state;
+            return buffer;
+        }
+
+        processAudio(e) {
+            const output = e.outputBuffer.getChannelData(0);
+            const buffer = this.generateNoise(output.length);
+            // Проверка таймера и затухание
+            if (this.startTime) {
+                const elapsed = (Date.now() - this.startTime) / 1000;
+                const remaining = this.timerMinutes * 60 - elapsed;
+                if (remaining <= 0) {
+                    this.stop();
+                    return;
+                }
+                if (remaining < this.fadeDuration) {
+                    const fade = remaining / this.fadeDuration;
+                    for (let i = 0; i < buffer.length; i++) {
+                        buffer[i] *= fade;
+                    }
+                }
+            }
+            output.set(buffer);
+        }
+
+        start() {
+            if (this.running) return;
+            if (!this.audioCtx) this.init();
+            this.startTime = Date.now();
+            this.running = true;
+            this.audioCtx.resume();
+
+            this.scriptNode = this.audioCtx.createScriptProcessor(this.bufferSize, 0, 1);
+            this.scriptNode.onaudioprocess = (e) => this.processAudio(e);
+
+            this.source = this.audioCtx.createBufferSource();
+            this.source.buffer = this.audioCtx.createBuffer(1, 1, this.audioCtx.sampleRate);
+            this.source.loop = true;
+            this.source.connect(this.scriptNode);
+            this.scriptNode.connect(this.audioCtx.destination);
+
+            // Таймер обновления UI
+            this.timerInterval = setInterval(() => this.updateUI(), 1000);
+            document.getElementById('playBtn').textContent = '▶ Играет';
+            document.getElementById('statusDisplay').textContent = '🔊 Играет';
+            document.getElementById('playBtn').classList.add('active');
+        }
+
+        stop() {
+            if (!this.running) return;
+            this.running = false;
+            if (this.source) {
+                this.source.stop();
+                this.source.disconnect();
+                this.source = null;
+            }
+            if (this.scriptNode) {
+                this.scriptNode.disconnect();
+                this.scriptNode = null;
+            }
+            clearInterval(this.timerInterval);
+            document.getElementById('playBtn').textContent = '▶ Запустить';
+            document.getElementById('statusDisplay').textContent = '⏸ Остановлен';
+            document.getElementById('playBtn').classList.remove('active');
+            document.getElementById('timerDisplay').textContent = this.formatTime(this.timerMinutes * 60);
+        }
+
+        updateUI() {
+            if (!this.running) return;
+            const elapsed = (Date.now() - this.startTime) / 1000;
+            const remaining = Math.max(0, this.timerMinutes * 60 - elapsed);
+            document.getElementById('timerDisplay').textContent = this.formatTime(remaining);
+            if (remaining <= 0) this.stop();
+        }
+
+        formatTime(seconds) {
+            const m = Math.floor(seconds / 60);
+            const s = Math.floor(seconds % 60);
+            return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+        }
+
+        setVolume(val) {
+            this.volume = Math.max(0, Math.min(1, val / 100));
+            document.getElementById('volumeLabel').textContent = Math.round(this.volume * 100) + '%';
+        }
+
+        setTimer(min) {
+            this.timerMinutes = Math.max(5, Math.min(120, min));
+            document.getElementById('timerLabel').textContent = this.timerMinutes;
+            if (this.running) {
+                this.startTime = Date.now(); // сброс таймера
+            }
+            document.getElementById('timerDisplay').textContent = this.formatTime(this.timerMinutes * 60);
+        }
+
+        setNoiseType(type) {
+            this.noiseType = type;
+            document.querySelectorAll('#whiteBtn, #pinkBtn, #brownBtn').forEach(b => b.style.background = '#0f3460');
+            if (type === 'white') document.getElementById('whiteBtn').style.background = '#1a5276';
+            else if (type === 'pink') document.getElementById('pinkBtn').style.background = '#1a5276';
+            else if (type === 'brown') document.getElementById('brownBtn').style.background = '#1a5276';
+        }
+    }
+
+    const wn = new WhiteNoise();
+
+    // UI bindings
+    document.getElementById('playBtn').addEventListener('click', () => wn.start());
+    document.getElementById('stopBtn').addEventListener('click', () => wn.stop());
+
+    document.getElementById('volumeSlider').addEventListener('input', function() {
+        wn.setVolume(parseInt(this.value));
+    });
+
+    document.getElementById('timerSlider').addEventListener('input', function() {
+        wn.setTimer(parseInt(this.value));
+    });
+
+    document.getElementById('whiteBtn').addEventListener('click', () => wn.setNoiseType('white'));
+    document.getElementById('pinkBtn').addEventListener('click', () => wn.setNoiseType('pink'));
+    document.getElementById('brownBtn').addEventListener('click', () => wn.setNoiseType('brown'));
+
+    // Инициализация
+    wn.init().then(() => {
+        console.log('Аудио контекст готов');
+        // Установка начального типа
+        wn.setNoiseType('white');
+        wn.setVolume(70);
+        wn.setTimer(30);
+    });
+</script>
+</body>
+</html>
